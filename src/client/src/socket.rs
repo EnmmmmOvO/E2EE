@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::error::Error;
 use hex::FromHex;
 use log::{info, warn};
+use crate::file::SessionKey;
 use crate::key::AccountKeys;
 use crate::session::Session;
 
@@ -39,8 +40,7 @@ pub struct SessionResponse {
     opk_private: String, 
 }
 
-pub async fn get_session(target: &str) -> Result<Session, Box<dyn Error>> {
-    warn!("Getting session for {}", target);
+pub async fn get_session(target: &str, account: &str) -> Result<Session, Box<dyn Error>> {
     let response = Client::new()
         .post(std::env::var("SERVER_URL")? + "/session/")
         .json(&SessionPayload { target: target.to_string() })
@@ -49,13 +49,18 @@ pub async fn get_session(target: &str) -> Result<Session, Box<dyn Error>> {
 
     if response.status().is_success() {
         let result = response.json::<SessionResponse>().await?;
-        Ok(Session::new(
+        
+        let session = Session::new(
             &*result.account,
             Vec::from_hex(&result.ik_public)?,
             Vec::from_hex(&result.spk_public)?,
             Vec::from_hex(&result.spk_signature)?,
             Vec::from_hex(&result.opk_private)?
-        ))
+        );
+        
+        SessionKey::save(&session, account)?;
+        info!("Loaded session for {}", target);
+        Ok(session)
     } else {
         Err(format!("Failed with status: {}", response.status()).into())
     }
@@ -73,7 +78,6 @@ pub struct UploadPayload {
 
 impl UploadPayload {
     pub async fn new(account: &AccountKeys, name: &str) -> Result<(), Box<dyn Error>> {
-        println!("Uploading keys");
         let key = UploadPayload {
             account: name.to_string(),
             ik_public: hex::encode(&account.identity_keypair.public_key),

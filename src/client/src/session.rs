@@ -3,11 +3,11 @@ use crate::message::Message;
 
 #[derive(Debug)]
 pub struct Session {
-    target: String,
-    ikp: Vec<u8>,
-    spk: Vec<u8>,
-    spk_sig: Vec<u8>,
-    opk: Vec<u8>,
+    pub target: String,
+    pub ikp: Vec<u8>,
+    pub spk: Vec<u8>,
+    pub spk_sig: Vec<u8>,
+    pub opk: Vec<u8>,
     message: Arc<Mutex<Vec<Message>>>,
 }
 

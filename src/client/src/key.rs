@@ -53,7 +53,7 @@ impl AccountKeys {
             identity_keypair,
         };
         
-        LocalKey::new(&key, &account)?;
+        LocalKey::save(&key, &account)?;
         UploadPayload::new(&key, &account).await?;
         
         Ok(key)
@@ -94,5 +94,5 @@ impl AccountKeys {
         })
     }
     
-    pub fn load(account: &str) -> Result<Self, Box<dyn Error>> { Ok(LocalKey::from(account)?) }
+    pub fn load(account: &str) -> Result<Self, Box<dyn Error>> { Ok(LocalKey::load(account)?) }
 }

@@ -5,31 +5,14 @@ use glob::glob;
 use log::info;
 use tokio::runtime::Runtime;
 use crate::account::Account;
+use crate::file::{init_load, init_load_user, SessionKey};
 use crate::message::Message;
 use crate::session::Session;
 use crate::socket::{get_session, search};
 
-fn init_load() -> Vec<String> {
-    info!("Loading user directories");
-    let pattern = std::env::var("BACKUP_PATH").expect("BACKUP_PATH must be set") + "/*";
 
-    let mut users = Vec::new();
 
-    for entry in glob(&pattern).expect("Failed to read glob pattern") {
-        match entry {
-            Ok(path) => {
-                if path.is_dir() {
-                    let path = path.file_name().unwrap();
-                    info!("Found user {:?}", path);
-                    users.push(path.to_string_lossy().to_string());
-                }
-            },
-            Err(e) => println!("Error: {:?}", e),
-        }
-    }
 
-    users
-}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -39,6 +22,7 @@ pub struct AppState {
     target: Arc<Mutex<Option<Session>>>,
     backup_user: Vec<String>,
     pub search_results: Arc<Mutex<Vec<String>>>,
+    load_user: Vec<String>,
     runtime: Arc<Runtime>,
 }
 
@@ -58,6 +42,7 @@ impl AppState {
             target: Arc::new(Mutex::new(None)),
             backup_user: init_load(),
             search_results: Arc::new(Mutex::new(vec![])),
+            load_user: Vec::new(),
             runtime: Arc::new(Runtime::new().unwrap()),
         }
     }
@@ -79,6 +64,7 @@ impl AppState {
                         self.current_page = Page::Search;
                         self.input_text.clear();
                         self.search_results.lock().unwrap().clear();
+                        self.load_user = init_load_user(&self.input_text);
                     },
                     Err(e) => {
                         ui.label("Error loading account");
@@ -119,6 +105,7 @@ impl AppState {
                         self.current_page = Page::Search;
                         self.input_text.clear();
                         self.search_results.lock().unwrap().clear();
+                        self.load_user = init_load_user(result);
                     },
                     Err(e) => {
                         ui.label("Error loading account");
@@ -147,7 +134,6 @@ impl AppState {
             "None"
         }));
         
-        
         ui.horizontal(|ui| {
             ui.label("Search:");
             ui.text_edit_singleline(&mut self.input_text);
@@ -175,22 +161,57 @@ impl AppState {
 
         for result in self.search_results.lock().unwrap().iter() {
             if ui.button(result).clicked() {
-                let input_text = result.clone();
-                let target = Arc::clone(&self.target);
-                
-                self.runtime.spawn(async move {
-                    match get_session(&input_text).await {
+                if self.load_user.contains(result) {
+                    match SessionKey::load(result, self.account.lock().unwrap().as_ref().unwrap().name()) {
                         Ok(session) => {
-                            info!("Got session for {input_text}");
-                            *target.lock().unwrap() = Some(session);
+                            info!("Loaded session {:?}", session.name());
+                            self.target.lock().unwrap().replace(session);
+                            self.current_page = Page::Chat;
+                            self.input_text.clear();
                         },
                         Err(e) => {
-                            info!("Error getting session: {:?}", e);
+                            ui.label("Error loading session");
+                            info!("Error loading session: {:?}", e);
                         }
                     }
-                });
-                self.current_page = Page::Chat;
-                self.input_text.clear();
+                } else {
+                    let input_text = result.clone();
+                    let target = Arc::clone(&self.target);
+                    let name = self.account.lock().unwrap().as_ref().unwrap().name().to_string();
+
+                    self.runtime.spawn(async move {
+                        match get_session(&input_text, &name).await {
+                            Ok(session) => {
+                                info!("Got session for {input_text}");
+                                *target.lock().unwrap() = Some(session);
+                            },
+                            Err(e) => {
+                                info!("Error getting session: {:?}", e);
+                            }
+                        }
+                    });
+                    self.current_page = Page::Chat;
+                    self.input_text.clear();
+                }
+            }
+        }
+        
+        ui.label("Session:");
+        
+        for result in &self.load_user {
+            if ui.button(result).clicked() {
+                match SessionKey::load(result, self.account.lock().unwrap().as_ref().unwrap().name()) {
+                    Ok(session) => {
+                        info!("Loaded session {:?}", session.name());
+                        self.target.lock().unwrap().replace(session);
+                        self.current_page = Page::Chat;
+                        self.input_text.clear();
+                    },
+                    Err(e) => {
+                        ui.label("Error loading session");
+                        info!("Error loading session: {:?}", e);
+                    }
+                }
             }
         }
     }
@@ -202,6 +223,7 @@ impl AppState {
                 self.search_results.lock().unwrap().clear();
                 self.target.lock().unwrap().take();
                 self.input_text.clear();
+                self.load_user = init_load_user(&self.account.lock().unwrap().as_ref().unwrap().name());
             }
             ui.heading(format!("Chat with {}", self.target.lock().unwrap().as_ref()
                 .map_or("Default Name", |target| target.name())

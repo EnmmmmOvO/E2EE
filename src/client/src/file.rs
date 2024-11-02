@@ -2,10 +2,57 @@ use std::error::Error;
 use std::fs;
 use std::fs::File;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
+use glob::glob;
 use log::info;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use crate::key::{AccountKeys, IdentityKeyPair, PreKey, SignedPreKeyPair};
+use crate::session::Session;
+
+pub fn init_load() -> Vec<String> {
+    info!("Loading user directories");
+    let pattern = std::env::var("BACKUP_PATH").expect("BACKUP_PATH must be set") + "/*";
+
+    let mut users = Vec::new();
+
+    for entry in glob(&pattern).expect("Failed to read glob pattern") {
+        match entry {
+            Ok(path) => {
+                if path.is_dir() {
+                    let path = path.file_name().unwrap();
+                    info!("Found user {:?}", path);
+                    users.push(path.to_string_lossy().to_string());
+                }
+            },
+            Err(e) => println!("Error: {:?}", e),
+        }
+    }
+
+    users
+}
+
+pub fn init_load_user(user: &str) -> Vec<String> {
+    info!("Loading user directories");
+    let pattern = std::env::var("BACKUP_PATH").expect("BACKUP_PATH must be set") + user + "/*";
+
+    let mut users = Vec::new();
+
+    for entry in glob(&pattern).expect("Failed to read glob pattern") {
+        match entry {
+            Ok(path) => {
+                if path.is_dir() {
+                    let path = path.file_name().unwrap();
+                    info!("Found last user {:?}", path);
+                    users.push(path.to_string_lossy().to_string());
+                }
+            },
+            Err(e) => println!("Error: {:?}", e),
+        }
+    }
+
+    users
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LocalKey {
@@ -18,7 +65,7 @@ pub struct LocalKey {
 }
 
 impl LocalKey {
-    pub fn new(account: &AccountKeys, path: &str) -> Result<(), Box<dyn Error>> {
+    pub fn save(account: &AccountKeys, path: &str) -> Result<(), Box<dyn Error>> {
         let json = LocalKey {
             ik_private: hex::encode(&account.identity_keypair.private_key),
             ik_public: hex::encode(&account.identity_keypair.public_key),
@@ -37,7 +84,7 @@ impl LocalKey {
         Ok(())
     }
     
-    pub fn from(account: &str) -> Result<AccountKeys, Box<dyn Error>> {
+    pub fn load(account: &str) -> Result<AccountKeys, Box<dyn Error>> {
         let json: LocalKey = serde_json::from_reader(
             File::open(std::env::var("BACKUP_PATH")? + account + "/keys.json")?
         )?;
@@ -63,5 +110,46 @@ impl LocalKey {
                     public_key: vec![], 
                 }).collect(),
         })
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SessionKey {
+    ikp: String,
+    spk: String,
+    spk_sig: String,
+    opk: String
+}
+
+impl SessionKey {
+    pub fn save(session: &Session, account: &str) -> Result<(), Box<dyn Error>> {
+        let json = SessionKey {
+            ikp: hex::encode(&session.ikp),
+            spk: hex::encode(&session.spk),
+            spk_sig: hex::encode(&session.spk_sig),
+            opk: hex::encode(&session.opk),
+        };
+        
+        let folder_path = Path::new(&std::env::var("BACKUP_PATH")?).join(account).join(&session.target);
+        fs::create_dir(&folder_path)?;
+        
+        let file = File::create(folder_path.join("key.json"))?;
+        serde_json::to_writer_pretty(file, &json)?;
+        
+        Ok(())
+    }
+    
+    pub fn load(path: &str, account: &str) -> Result<Session, Box<dyn Error>> {
+        let json: SessionKey = serde_json::from_reader(
+            File::open(std::env::var("BACKUP_PATH")? + account + "/" + path + "/key.json")?
+        )?;
+        
+        Ok(Session::new(
+            path,
+            hex::decode(json.ikp)?,
+            hex::decode(json.spk)?,
+            hex::decode(json.spk_sig)?,
+            hex::decode(json.opk)?,
+        ))
     }
 }
