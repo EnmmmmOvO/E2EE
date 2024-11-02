@@ -20,3 +20,11 @@ create table request (
     id int not null,
     primary key (account, target)
 );
+
+create table chat (
+    id serial primary key,
+    account varchar(255) not null,
+    target varchar(255) not null,
+    message text not null,
+    timestamp bigint not null
+)

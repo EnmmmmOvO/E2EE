@@ -192,3 +192,49 @@ impl RequestPayload {
         }
     }
 }
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct MessagePayload {
+    account: String,
+    target: String,
+    pub message: String,
+    pub timestamp: i64,
+}
+
+impl MessagePayload {
+    pub async fn send(account: &str, target: &str, message: String, timestamp: i64) -> Result<(), Box<dyn Error>> {
+        let response = Client::new()
+            .post(std::env::var("SERVER_URL")? + "/create/message/")
+            .json(&Self { 
+                account: account.to_string(), 
+                target: target.to_string(), 
+                message, 
+                timestamp 
+            })
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            info!("Sent message");
+            Ok(())
+        } else {
+            Err(Box::from(format!("Failed to send message: {}", response.status())))
+        }
+    }
+    
+    pub async fn receive(account: String, target: String) -> Result<Vec<MessagePayload>, Box<dyn Error>> {
+        let response = Client::new()
+            .post(std::env::var("SERVER_URL")? + "/message/")
+            .json(&SearchPayload { account, target })
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            info!("Received message");
+            let result = response.json::<Vec<MessagePayload>>().await?;
+            Ok(result)
+        } else {
+            Err(Box::from(format!("Failed to receive message: {}", response.status())))
+        }
+    }
+}

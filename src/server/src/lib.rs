@@ -80,6 +80,8 @@ pub async fn start() -> Result<(), Box<dyn std::error::Error>> {
         .route("/create/session/", post(create_session))
         .route("/list/session/", post(get_session_list))
         .route("/get/session/", post(get_session))
+        .route("/create/message/", post(create_message))
+        .route("/message/", post(get_message))
         .layer(Extension(db.clone()));
 
     let listener = tokio::net::TcpListener::bind(std::env::var("SERVER_URL")?).await.unwrap();
@@ -169,6 +171,9 @@ async fn session(
                 opk: opk.opk,
                 id: opk.id
             };
+            
+            sqlx::query!("DELETE FROM opk WHERE opk = $1", user.opk).execute(db.as_ref()).await.unwrap();
+            
             info!("[Session] <{}> created a session", payload.target);
             (StatusCode::OK, Json(Some(user)))
         } else {
@@ -240,6 +245,7 @@ async fn get_session(
     
     if let Some(row) = result {
         info!("[Session] <{}> accepted a session with <{}>", payload.account, payload.target);
+        sqlx::query!("DELETE FROM request WHERE account = $1 and target = $2", &payload.account, &payload.target).execute(db.as_ref()).await.unwrap();
         (StatusCode::OK, Json(Some(RequestPayload {
             account: row.account,
             target: row.target,
@@ -251,4 +257,72 @@ async fn get_session(
         warn!("[Session] <{}> failed to accept a session with <{}>", payload.account, payload.target);
         (StatusCode::NOT_FOUND, Json(None::<RequestPayload>))
     }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct MessagePayload {
+    account: String,
+    target: String,
+    message: String,
+    timestamp: i64,
+}
+
+#[axum::debug_handler]
+async fn create_message(
+    Extension(db): Extension<Arc<PgPool>>,
+    Json(payload): Json<MessagePayload>
+) -> impl IntoResponse {
+    info!("[Message] {} sent a message to {}", payload.account, payload.target);
+    let temp = sqlx::query!(
+        "INSERT INTO chat (account, target, message, timestamp) VALUES ($1, $2, $3, $4)",
+        &payload.account, &payload.target, &payload.message, &payload.timestamp
+    ).execute(db.as_ref()).await;
+    
+    if temp.is_ok() {
+        info!("[Message] <{}> sent a message to <{}>", payload.account, payload.target);
+        StatusCode::OK
+    } else {
+        warn!("[Message] <{}> failed to send a message to <{}>", payload.account, payload.target);
+        StatusCode::INTERNAL_SERVER_ERROR
+    }
+}
+
+#[axum::debug_handler]
+async fn get_message(
+    Extension(db): Extension<Arc<PgPool>>,
+    Json(payload): Json<SearchPayload>
+) -> impl IntoResponse {
+    info!("[Message] {} sent a message to {}", payload.account, payload.target);
+    let temp = sqlx::query!(
+        "SELECT * FROM CHAT WHERE account = $1 and target = $2",
+        &payload.target, &payload.account
+    ).fetch_all(db.as_ref()).await;
+    
+    match temp {
+        Ok(rows) => {
+            let result: Vec<MessagePayload> = rows.iter()
+                .map(|row| MessagePayload {
+                    account: row.account.clone(),
+                    target: row.target.clone(),
+                    message: row.message.clone(),
+                    timestamp: row.timestamp,
+                })
+                .collect();
+
+            info!("[Message] Found {} messages between {} and {}", 
+                result.len(), payload.account, payload.target);
+            
+            sqlx::query!(
+                "DELETE FROM chat WHERE account = $1 and target = $2",
+                &payload.target, &payload.account
+            ).execute(db.as_ref()).await.unwrap();
+                
+            (StatusCode::OK, Json(result))
+        },
+        Err(e) => {
+            warn!("[Message] Error fetching messages: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(Vec::new()))
+        }
+    }
+
 }

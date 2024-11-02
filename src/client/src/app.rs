@@ -7,27 +7,51 @@ use crate::account::Account;
 use crate::file::{init_load, init_load_user, SessionKey};
 use crate::message::Message;
 use crate::session::Session;
-use crate::socket::{get_session, get_session_list, search, RequestPayload};
+use crate::socket::{get_session, get_session_list, search, MessagePayload, RequestPayload};
 
 
-#[derive(Clone)]
 pub struct AppState {
     input_text: String,
     current_page: Page,
     account: Arc<Mutex<Option<Account>>>,
     target: Arc<Mutex<Option<Session>>>,
+    message: Arc<Mutex<Vec<Message>>>,
     backup_user: Vec<String>,
     pub search_results: Arc<Mutex<Vec<String>>>,
     load_user: Vec<String>,
     request_user: Arc<Mutex<Vec<String>>>,
     runtime: Arc<Runtime>,
+    refresh_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl AppState {
     fn send_message(&mut self) {
         if !self.input_text.trim().is_empty() {
-            self.target.lock().unwrap().as_ref().unwrap().add_message(Message::new(self.input_text.clone()));
-            self.input_text.clear();
+            let input_text = self.input_text.clone();
+            let message = Message::new(input_text.to_string());
+            let time = message.timestamp;
+            self.message.lock().unwrap().push(message.clone());
+            
+            let payload = self.target.lock().unwrap().as_mut().unwrap().add_message(message);
+            
+            if let Ok(payload) = payload { 
+                let account = {
+                    self.account.lock().unwrap().as_ref().unwrap().name().to_string()
+                };
+                
+                let target = {
+                    self.target.lock().unwrap().as_ref().unwrap().name().to_string()
+                };
+                
+                self.runtime.spawn(async move {
+                    match MessagePayload::send(&account, &target, payload, time).await {
+                        Ok(_) => { info!("Sent message"); },
+                        Err(e) => { warn!("Error sending message: {:?}", e); }
+                    }
+                });
+            } else {
+                warn!("Error adding message");
+            }
         }
     }
     
@@ -38,10 +62,12 @@ impl AppState {
             account: Arc::new(Mutex::new(None)),
             target: Arc::new(Mutex::new(None)),
             backup_user: init_load(),
+            message: Arc::new(Mutex::new(vec![])),
             search_results: Arc::new(Mutex::new(vec![])),
             load_user: Vec::new(),
             request_user: Arc::new(Mutex::new(Vec::new())),
             runtime: Arc::new(Runtime::new().unwrap()),
+            refresh_task: None,
         }
     }
 
@@ -280,6 +306,56 @@ impl AppState {
     }
 
     fn show_chat_page(&mut self, ui: &mut egui::Ui) {
+        if self.refresh_task.is_none() {
+            let target = Arc::clone(&self.target);
+            let runtime = self.runtime.clone();
+            let account = {
+                match self.account.lock().unwrap().as_ref() { 
+                    Some(account) => Some(account.name().to_string()),
+                    None => None,
+                }
+            };
+            
+            let target_name = {
+                match self.target.lock().unwrap().as_ref() {
+                    Some(target) => Some(target.name().to_string()),
+                    None => None,
+                }
+            };
+            
+            if let (Some(account), Some(target_name)) = (account, target_name) {
+                let message = Arc::clone(&self.message);
+                self.refresh_task = Some(runtime.spawn(async move {
+                    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
+                    loop {
+                        interval.tick().await;
+                        
+                        match MessagePayload::receive(account.to_string(), target_name.to_string()).await {
+                            Ok(messages) => {
+                                let mut temp = vec![];
+                                for message in messages {
+                                    if let Some(target) = target.lock().unwrap().as_mut() {
+                                        match target.revive_message(message.message, message.timestamp) {
+                                            Ok(result) => {
+                                                temp.push(result);
+                                            },
+                                            Err(e) => {
+                                                warn!("Error reviving message: {:?}", e);
+                                            }
+                                        }
+                                    }
+                                }
+                                message.lock().unwrap().extend(temp);
+                            },
+                            Err(e) => {
+                                warn!("Error refreshing messages: {:?}", e);
+                            }
+                        }
+                    }
+                }));
+            }
+        }
+        
         ui.horizontal(|ui| {
             if ui.button("Back").clicked() {
                 self.current_page = Page::Search;
@@ -307,22 +383,16 @@ impl AppState {
         });
         
         egui::ScrollArea::vertical().show(ui, |ui| {
-            match self.target.lock().unwrap().as_ref() { 
-                Some(messages) => {
-                    for msg in messages.message().lock().unwrap().iter() {
-                        if msg.sender {
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                                ui.label(format!("{} - {}", msg, msg.timestamp()));
-                            });
-                        } else {
-                            ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
-                                ui.label(format!("{} - {}", msg, msg.timestamp()));
-                            });
-                        }
-                    }
-                },
-                None => {
-                    ui.label("No messages");
+            let messages = self.message.lock().unwrap();
+            for msg in messages.iter() {
+                if msg.sender {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+                        ui.label(format!("{} - {}", msg, msg.timestamp()));
+                    });
+                } else {
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
+                        ui.label(format!("{} - {}", msg, msg.timestamp()));
+                    });
                 }
             }
             

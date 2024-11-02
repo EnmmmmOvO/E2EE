@@ -7,8 +7,15 @@ use crate::message::Message;
 use hkdf::Hkdf;
 use ring::hkdf::{Salt, HKDF_SHA256};
 use sha2::Sha256;
-use crate::socket::RequestPayload;
+use crate::socket::{MessagePayload, RequestPayload};
 use crate::support::X25519;
+use aes_gcm::{
+    aead::{Aead, KeyInit},
+    Aes256Gcm, Key, Nonce,
+};
+use aes_gcm::aead::rand_core::RngCore;
+use log::info;
+use rand::rngs::OsRng;
 
 const CHAIN_KEY_CONSTANT: &[u8] = b"chain_key";
 const MESSAGE_KEY_CONSTANT: &[u8] = b"message_key";
@@ -20,7 +27,6 @@ pub struct Session {
     pub send_chain_key: [u8; 32],
     pub recv_chain_key: [u8; 32],
     pub account: Arc<Mutex<Option<Account>>>,
-    message: Arc<Mutex<Vec<Message>>>,
 }
 
 impl Session {
@@ -91,7 +97,6 @@ impl Session {
         Ok(Self {
             account, session_key, send_chain_key, recv_chain_key, 
             target: target.to_string(),
-            message: Arc::new(Mutex::new(vec![]))
         })
     }
     
@@ -157,7 +162,6 @@ impl Session {
         Ok(Self {
             account, session_key, send_chain_key, recv_chain_key, 
             target: target.to_string(),
-            message: Arc::new(Mutex::new(vec![]))
         })
     }
     
@@ -171,26 +175,52 @@ impl Session {
         Self {
             account, session_key, send_chain_key, recv_chain_key, 
             target: target.to_string(),
-            message: Arc::new(Mutex::new(vec![]))
         }
     }
     
     pub fn name(&self) -> &str {
         &self.target
     }
-    
-    pub fn message(&self) -> Arc<Mutex<Vec<Message>>> {
-        self.message.clone()
-    }
 
-    pub fn revive_message(&mut self, message: Message) -> Result<(), Box<dyn Error>> {
-        self.add_message(message);
-        Ok(())
+    pub fn revive_message(&mut self, payload: String, timestamp: i64) -> Result<Message, Box<dyn Error>> {
+        let nonce_bytes = hex::decode(&payload[..24])?;
+        let ciphertext = hex::decode(&payload[24..])?;
+        
+        let nonce_array: [u8; 12] = nonce_bytes.try_into()
+        .map_err(|_| "Invalid nonce length")?;
+        
+        let message_key = self.ratchet_recv()?;
+        
+        let cipher = Aes256Gcm::new_from_slice(&message_key)
+            .map_err(|e| format!("Failed to create cipher: {}", e))?;
+        let nonce = Nonce::from_slice(&nonce_array);
+        
+        let plaintext = cipher.decrypt(nonce, ciphertext.as_slice())
+            .map_err(|e| format!("Decryption failed: {}", e))?;
+        
+        let message = String::from_utf8(plaintext)
+            .map_err(|e| format!("Invalid UTF-8: {}", e))?;
+        
+        Ok(Message { sender: false, timestamp, text: message })
     }
     
-    pub fn add_message(&self, message: Message) {
-        let mut messages = self.message.lock().unwrap();
-        messages.push(message);
+    pub fn add_message(&mut self, message: Message) -> Result<String, Box<dyn Error>> {
+        
+        let message_key = self.ratchet_send()?;
+        
+        let key = Key::<Aes256Gcm>::from_slice(&message_key);
+        let cipher = Aes256Gcm::new(key);
+        let mut nonce_bytes = [0u8; 12];
+        OsRng.fill_bytes(&mut nonce_bytes);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        
+        let ciphertext = cipher.encrypt(nonce, message.text.as_bytes())
+            .map_err(|e| format!("Failed to encrypt message: {}", e))?;
+        
+        
+        let encrypted_payload = hex::encode(nonce_bytes.to_vec()) + &hex::encode(ciphertext);
+        
+        Ok(encrypted_payload)
     }
     
     fn ratchet_send(&mut self) -> Result<[u8; 32], Box<dyn Error>> {
