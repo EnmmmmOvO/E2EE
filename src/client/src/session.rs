@@ -10,6 +10,9 @@ use sha2::Sha256;
 use crate::socket::RequestPayload;
 use crate::support::X25519;
 
+const CHAIN_KEY_CONSTANT: &[u8] = b"chain_key";
+const MESSAGE_KEY_CONSTANT: &[u8] = b"message_key";
+
 #[derive(Debug)]
 pub struct Session {
     pub target: String,
@@ -113,22 +116,17 @@ impl Session {
         };
         
         let session_key = {
-            // DH 计算必须按照与发送方相同的顺序组合密钥材料
             let mut key_material = Vec::new();
             
-            // DH1 = DH(SPKb, IKa) = DH(IKa, SPKb)
             let dh1 = x25519(spk_private_key, ikp);
             key_material.extend_from_slice(&dh1);
             
-            // DH2 = DH(IKb, EKa) = DH(EKa, IKb)
             let dh2 = x25519(ik_private_key, ekp);
             key_material.extend_from_slice(&dh2);
             
-            // DH3 = DH(SPKb, EKa) = DH(EKa, SPKb)
             let dh3 = x25519(spk_private_key, ekp);
             key_material.extend_from_slice(&dh3);
             
-            // DH4 = DH(OPKb, EKa) = DH(EKa, OPKb)
             let dh4 = x25519(opk_private_key, ekp);
             key_material.extend_from_slice(&dh4);
     
@@ -146,12 +144,12 @@ impl Session {
         let mut send_chain_key = [0u8; 32];
         let mut recv_chain_key = [0u8; 32];
         
-        let send_okm = prk.expand(&[b"send chain"], HKDF_SHA256)
+        let send_okm = prk.expand(&[b"recv chain"], HKDF_SHA256)
             .map_err(|e| format!("Failed to expand send chain key: {}", e))?;
         send_okm.fill(&mut send_chain_key)
             .map_err(|e| format!("Failed to fill send chain key: {}", e))?;
         
-        let recv_okm = prk.expand(&[b"recv chain"], HKDF_SHA256)
+        let recv_okm = prk.expand(&[b"send chain"], HKDF_SHA256)
             .map_err(|e| format!("Failed to expand recv chain key: {}", e))?;
         recv_okm.fill(&mut recv_chain_key)
             .map_err(|e| format!("Failed to fill recv chain key: {}", e))?;
@@ -184,9 +182,8 @@ impl Session {
     pub fn message(&self) -> Arc<Mutex<Vec<Message>>> {
         self.message.clone()
     }
-    
+
     pub fn revive_message(&mut self, message: Message) -> Result<(), Box<dyn Error>> {
-        self.retched_recv()?;
         self.add_message(message);
         Ok(())
     }
@@ -196,28 +193,36 @@ impl Session {
         messages.push(message);
     }
     
-    fn retched_send(&mut self) -> Result<(), Box<dyn Error>> {
+    fn ratchet_send(&mut self) -> Result<[u8; 32], Box<dyn Error>> {
         let prk = Salt::new(HKDF_SHA256, &self.send_chain_key).extract(&[]);
         
-        let mut message_key = [0u8; 32];
-        prk.expand(&[b"message key"], HKDF_SHA256).unwrap()
-            .fill(&mut message_key)
-            .unwrap();
+        let mut new_chain_key = [0u8; 32];
+        prk.expand(&[CHAIN_KEY_CONSTANT], HKDF_SHA256).map_err(|e| format!("Failed to expand chain key: {}", e))?
+           .fill(&mut new_chain_key).map_err(|e| format!("Failed to fill chain key: {}", e))?;
         
-        self.send_chain_key = message_key;
-        Ok(())
+        let mut message_key = [0u8; 32];
+        prk.expand(&[MESSAGE_KEY_CONSTANT], HKDF_SHA256).map_err(|e| format!("Failed to expand message key: {}", e))?
+           .fill(&mut message_key).map_err(|e| format!("Failed to fill message key: {}", e))?;
+        
+        self.send_chain_key = new_chain_key;
+        
+        Ok(message_key)
     }
     
-    fn retched_recv(&mut self) -> Result<(), Box<dyn Error>> {
+    fn ratchet_recv(&mut self) -> Result<[u8; 32], Box<dyn Error>> {
         let prk = Salt::new(HKDF_SHA256, &self.recv_chain_key).extract(&[]);
         
-        let mut message_key = [0u8; 32];
-        prk.expand(&[b"message key"], HKDF_SHA256).unwrap()
-            .fill(&mut message_key)
-            .unwrap();
+        let mut new_chain_key = [0u8; 32];
+        prk.expand(&[CHAIN_KEY_CONSTANT], HKDF_SHA256).map_err(|e| format!("Failed to expand chain key: {}", e))?
+           .fill(&mut new_chain_key).map_err(|e| format!("Failed to fill chain key: {}", e))?;
         
-        self.recv_chain_key = message_key;
-        Ok(())
+        let mut message_key = [0u8; 32];
+        prk.expand(&[MESSAGE_KEY_CONSTANT], HKDF_SHA256).map_err(|e| format!("Failed to expand message key: {}", e))?
+           .fill(&mut message_key).map_err(|e| format!("Failed to fill message key: {}", e))?;
+        
+        self.recv_chain_key = new_chain_key;
+        
+        Ok(message_key)
     }
 }
 

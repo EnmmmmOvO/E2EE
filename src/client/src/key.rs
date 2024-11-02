@@ -66,12 +66,11 @@ impl AccountKeys {
         // identity_keypair: &Ed25519KeyPair
     ) -> Result<SignedPreKeyPair, Box<dyn Error>> {
         let keypair = X25519::rand_key();
-        
 
         Ok(SignedPreKeyPair {
             private_key: keypair.private,
             public_key: keypair.public,
-            signature: vec![0, 0, 0, 0],
+            signature: [1u8; 32].to_vec(),
         })
     }
 
