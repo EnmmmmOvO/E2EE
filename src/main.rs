@@ -19,7 +19,7 @@ enum Commands {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
-
+    
     match &cli.command {
         Commands::Server => {
             from_path(Path::new("./src/server/.env")).expect("Failed to load .env file");

@@ -33,10 +33,14 @@ impl Session {
     ) -> Result<Self, Box<dyn Error>> {
         verify_spk_signature(&ikp, &spk, &spk_sig)?;
         
+        let (ik_private_key, spk_private_key) = {
+            let account_temp = account.lock().unwrap();
+            let account_ref = account_temp.as_ref().unwrap();
+            (account_ref.ik().private_key, account_ref.spk().private_key)
+        };
+        
         let session_key = x3dh(
-            ikp, spk, opk,
-            account.lock().unwrap().as_ref().unwrap().ik().private_key,
-            account.lock().unwrap().as_ref().unwrap().spk().private_key
+            ikp, spk, opk, ik_private_key, spk_private_key
         )?;
         
         Ok(Self {
@@ -69,13 +73,9 @@ fn verify_spk_signature(ikp_public: &[u8], spk: &[u8], spk_sig: &[u8]) -> Result
 }
 
 fn x3dh(ikp: [u8; 32], skp: [u8; 32], opk: [u8; 32], ik: [u8; 32], sk: [u8; 32]) -> Result<[u8; 32], Box<dyn Error>> {
-    info!("Starting X3DH");
     let dh1 = x25519(ik, skp);
-    info!("DH1: {:?}", dh1);
     let dh2 = x25519(sk, ikp);
-    info!("DH2: {:?}", dh2);
     let dh3 = x25519(sk, opk);
-    info!("DH3: {:?}", dh3);
     
     let mut key_material = Vec::new();
     key_material.extend_from_slice(&dh1);
@@ -86,6 +86,6 @@ fn x3dh(ikp: [u8; 32], skp: [u8; 32], opk: [u8; 32], ik: [u8; 32], sk: [u8; 32])
     let mut session_key = [0u8; 32];
     hk.expand(b"X3DH-Session-Key", &mut session_key).map_err(|e| format!("Failed to expand key: {}", e))?;
     
-    Ok([0u8; 32])
+    Ok(session_key)
 }
 
