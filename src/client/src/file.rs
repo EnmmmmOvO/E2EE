@@ -152,7 +152,6 @@ impl SessionKey {
         
         Ok(Session::load(
             path,
-            account,
             string_to_v32(&json.session_key)?,
             string_to_v32(&json.send_chain_key)?,
             string_to_v32(&json.recv_chain_key)?

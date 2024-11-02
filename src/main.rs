@@ -1,7 +1,7 @@
-use std::error::Error;
-use std::path::Path;
 use clap::{Parser, Subcommand};
 use dotenv::from_path;
+use std::error::Error;
+use std::path::Path;
 
 #[derive(Parser)]
 #[command(name = "App")]
@@ -19,7 +19,7 @@ enum Commands {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
-    
+
     match &cli.command {
         Commands::Server => {
             from_path(Path::new("./src/server/.env")).expect("Failed to load .env file");

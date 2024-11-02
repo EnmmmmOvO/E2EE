@@ -7,14 +7,13 @@ use crate::message::Message;
 use hkdf::Hkdf;
 use ring::hkdf::{Salt, HKDF_SHA256};
 use sha2::Sha256;
-use crate::socket::{MessagePayload, RequestPayload};
+use crate::socket::{RequestPayload};
 use crate::support::X25519;
 use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Key, Nonce,
 };
 use aes_gcm::aead::rand_core::RngCore;
-use log::info;
 use rand::rngs::OsRng;
 
 const CHAIN_KEY_CONSTANT: &[u8] = b"chain_key";
@@ -26,7 +25,6 @@ pub struct Session {
     pub session_key: [u8; 32],
     pub send_chain_key: [u8; 32],
     pub recv_chain_key: [u8; 32],
-    pub account: Arc<Mutex<Option<Account>>>,
 }
 
 impl Session {
@@ -95,7 +93,7 @@ impl Session {
         RequestPayload::send(name.to_string(), ik_public, ek.public, id, target.to_string()).await?;
         
         Ok(Self {
-            account, session_key, send_chain_key, recv_chain_key, 
+            session_key, send_chain_key, recv_chain_key, 
             target: target.to_string(),
         })
     }
@@ -160,20 +158,19 @@ impl Session {
             .map_err(|e| format!("Failed to fill recv chain key: {}", e))?;
         
         Ok(Self {
-            account, session_key, send_chain_key, recv_chain_key, 
+            session_key, send_chain_key, recv_chain_key, 
             target: target.to_string(),
         })
     }
     
     pub fn load(
         target: &str, 
-        account: Arc<Mutex<Option<Account>>>, 
         session_key: [u8; 32], 
         send_chain_key: [u8; 32], 
         recv_chain_key: [u8; 32]
     ) -> Self {
         Self {
-            account, session_key, send_chain_key, recv_chain_key, 
+            session_key, send_chain_key, recv_chain_key, 
             target: target.to_string(),
         }
     }
