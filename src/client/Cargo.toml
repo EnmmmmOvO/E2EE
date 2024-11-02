@@ -1,0 +1,21 @@
+[package]
+name = "client"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+fern = "0.7.0"
+log = "0.4.22"
+chrono = "0.4.38"
+egui = "0.29.1"
+eframe = "0.29.1"
+glob = "0.3"
+tokio = { version = "1.41.0", features = ["full", "rt-multi-thread"] }
+ed25519-dalek = "2.1.1"
+rand = "0.8.5"
+x25519-dalek = "2.0.1"
+hex = "0.4.3"
+serde = { version = "1.0.214", features = ["derive"] }
+serde_json = "1.0.132"
+reqwest = { version = "0.12.9", features = ["json"] }
+ring = "0.17.0"

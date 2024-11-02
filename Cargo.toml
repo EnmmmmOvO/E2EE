@@ -1,0 +1,10 @@
+[package]
+name = "e2ee"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+server = { path = "src/server" }
+client = { path = "src/client" }
+clap = { version = "4.5.20", features = ["derive"] }
+dotenv = "0.15.0"
