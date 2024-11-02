@@ -7,7 +7,7 @@ use crate::account::Account;
 use crate::file::{init_load, init_load_user, SessionKey};
 use crate::message::Message;
 use crate::session::Session;
-use crate::socket::{get_session, search};
+use crate::socket::{get_session, get_session_list, search, RequestPayload};
 
 
 #[derive(Clone)]
@@ -19,6 +19,7 @@ pub struct AppState {
     backup_user: Vec<String>,
     pub search_results: Arc<Mutex<Vec<String>>>,
     load_user: Vec<String>,
+    request_user: Arc<Mutex<Vec<String>>>,
     runtime: Arc<Runtime>,
 }
 
@@ -39,6 +40,7 @@ impl AppState {
             backup_user: init_load(),
             search_results: Arc::new(Mutex::new(vec![])),
             load_user: Vec::new(),
+            request_user: Arc::new(Mutex::new(Vec::new())),
             runtime: Arc::new(Runtime::new().unwrap()),
         }
     }
@@ -61,6 +63,19 @@ impl AppState {
                         self.input_text.clear();
                         self.search_results.lock().unwrap().clear();
                         self.load_user = init_load_user(&self.input_text);
+                        let request_user = Arc::clone(&self.request_user);
+                        let temp = self.input_text.clone();
+                        
+                        self.runtime.spawn(async move {
+                            match get_session_list(&temp).await {
+                                Ok(users) => {
+                                    *request_user.lock().unwrap() = users;
+                                },
+                                Err(e) => {
+                                    warn!("Error getting session list: {:?}", e);
+                                }
+                            }
+                        });
                     },
                     Err(e) => {
                         ui.label("Error loading account");
@@ -102,6 +117,19 @@ impl AppState {
                         self.input_text.clear();
                         self.search_results.lock().unwrap().clear();
                         self.load_user = init_load_user(result);
+                        let request_user = Arc::clone(&self.request_user);
+                        let temp = result.clone();
+                        
+                        self.runtime.spawn(async move {
+                            match get_session_list(&temp).await {
+                                Ok(users) => {
+                                    *request_user.lock().unwrap() = users;
+                                },
+                                Err(e) => {
+                                    warn!("Error getting session list: {:?}", e);
+                                }
+                            }
+                        });
                     },
                     Err(e) => {
                         ui.label("Error loading account");
@@ -157,7 +185,25 @@ impl AppState {
 
         for result in self.search_results.lock().unwrap().iter() {
             if ui.button(result).clicked() {
-                if self.load_user.contains(result) {
+                if self.request_user.lock().unwrap().contains(result) {
+                    let input_text = result.clone();
+                    let target = Arc::clone(&self.target);
+                    let account = self.account.clone();
+
+                    self.runtime.spawn(async move {
+                        match get_session(&input_text, account).await {
+                            Ok(session) => {
+                                info!("Got session for {input_text}");
+                                *target.lock().unwrap() = Some(session);
+                            },
+                            Err(e) => {
+                                warn!("Error getting session: {:?}", e);
+                            }
+                        }
+                    });
+                    self.current_page = Page::Chat;
+                    self.input_text.clear();
+                } else if self.load_user.contains(result) {
                     match SessionKey::load(result, self.account.clone()) {
                         Ok(session) => {
                             info!("Loaded session {:?}", session.name());
@@ -210,6 +256,27 @@ impl AppState {
                 }
             }
         }
+        
+        ui.label("Request:");
+        for result in &*self.request_user.lock().unwrap() {
+            if ui.button(result).clicked() {
+                let result = result.clone();
+                let account = self.account.clone();
+                let target = Arc::clone(&self.target);
+                self.runtime.spawn(async move {
+                    match RequestPayload::receive(result, account).await {
+                        Ok(session) => {
+                            target.lock().unwrap().replace(session);
+                        },
+                        Err(e) => {
+                            warn!("Error receiving request: {:?}", e);
+                        }
+                    }
+                });
+                self.current_page = Page::Chat;
+                self.input_text.clear();
+            }
+        }
     }
 
     fn show_chat_page(&mut self, ui: &mut egui::Ui) {
@@ -220,6 +287,19 @@ impl AppState {
                 self.target.lock().unwrap().take();
                 self.input_text.clear();
                 self.load_user = init_load_user(&self.account.lock().unwrap().as_ref().unwrap().name());
+                
+                let temp = self.account.lock().unwrap().as_ref().unwrap().name().to_string();
+                let request_user = Arc::clone(&self.request_user);
+                self.runtime.spawn(async move {
+                    match get_session_list(&temp).await {
+                        Ok(users) => {
+                            *request_user.lock().unwrap() = users;
+                        },
+                        Err(e) => {
+                            warn!("Error getting session list: {:?}", e);
+                        }
+                    }
+                });
             }
             ui.heading(format!("Chat with {}", self.target.lock().unwrap().as_ref()
                 .map_or("Default Name", |target| target.name())

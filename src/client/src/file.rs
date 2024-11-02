@@ -119,21 +119,17 @@ impl LocalKey {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SessionKey {
-    ikp: String,
-    spk: String,
-    spk_sig: String,
-    opk: String,
-    id: i32,
+    session_key: String,
+    pub send_chain_key: String,
+    pub recv_chain_key: String,
 }
 
 impl SessionKey {
     pub fn save(session: &Session, account: &str) -> Result<(), Box<dyn Error>> {
         let json = SessionKey {
-            ikp: hex::encode(&session.ikp),
-            spk: hex::encode(&session.spk),
-            spk_sig: hex::encode(&session.spk_sig),
-            opk: hex::encode(&session.opk),
-            id: session.id,
+            session_key: hex::encode(&session.session_key),
+            send_chain_key: hex::encode(&session.send_chain_key),
+            recv_chain_key: hex::encode(&session.recv_chain_key),
         };
         
         let folder_path = Path::new(&std::env::var("BACKUP_PATH")?).join(account).join(&session.target);
@@ -154,14 +150,12 @@ impl SessionKey {
             )?
         )?;
         
-        Ok(Session::new(
+        Ok(Session::load(
             path,
-            string_to_v32(&json.ikp)?,
-            string_to_v32(&json.spk)?,
-            hex::decode(json.spk_sig)?,
-            string_to_v32(&json.opk)?,
-            json.id,
             account,
-        )?)
+            string_to_v32(&json.session_key)?,
+            string_to_v32(&json.send_chain_key)?,
+            string_to_v32(&json.recv_chain_key)?
+        ))
     }
 }

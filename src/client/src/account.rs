@@ -29,4 +29,10 @@ impl Account {
     pub fn spk(&self) -> &SignedPreKeyPair {
         &self.key.signed_prekey
     }
+    
+    pub fn find_opk(&self, id: i32) -> Option<[u8; 32]> {
+        self.key.one_time_prekeys.iter()
+            .find(|k| k.id == id)
+            .map(|k| k.key)
+    }
 }

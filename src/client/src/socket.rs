@@ -2,7 +2,6 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::sync::{Arc, Mutex};
-use hex::FromHex;
 use log::{info};
 use crate::account::Account;
 use crate::file::SessionKey;
@@ -56,16 +55,32 @@ pub async fn get_session(target: &str, account: Arc<Mutex<Option<Account>>>) -> 
         
         let session = Session::new(
             &*result.account,
-            string_to_v32(&result.ik_public)?,
-            string_to_v32(&result.spk_public)?,
-            Vec::from_hex(&result.spk_signature)?,
-            string_to_v32(&result.opk)?,
+            string_to_v32(&result.ik_public).unwrap(),
+            string_to_v32(&result.spk_public).unwrap(),
+            vec![],
+            string_to_v32(&result.opk).unwrap(),
             result.id,
             account.clone()
-        )?;
+        ).await?;
         
         SessionKey::save(&session, account.lock().unwrap().as_ref().unwrap().name())?;
         info!("Loaded session for {}", target);
+        Ok(session)
+    } else {
+        Err(format!("Failed with status: {}", response.status()).into())
+    }
+}
+
+pub async fn get_session_list(account: &str) -> Result<Vec<String>, Box<dyn Error>> {
+    let response = Client::new()
+        .post(std::env::var("SERVER_URL")? + "/list/session/")
+        .json(&SessionPayload { target: account.to_string() })
+        .send()
+        .await?;
+
+    if response.status().is_success() {
+        let session = response.json::<Vec<String>>().await?;
+        info!("Find {} sessions", session.len());
         Ok(session)
     } else {
         Err(format!("Failed with status: {}", response.status()).into())
@@ -108,6 +123,72 @@ impl UploadPayload {
             Ok(())
         } else {
             Err(Box::from(format!("Failed to upload: {}", response.status())))
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct RequestPayload {
+    account: String,
+    target: String,
+    ikp: String,
+    ekp: String,
+    opk_id: i32,
+}
+
+impl RequestPayload {
+    pub async fn send(account: String, ikp: [u8; 32], ekp: [u8; 32], opk_id: i32, target: String) -> Result<(), Box<dyn Error>> {
+        let response = Client::new()
+            .post(std::env::var("SERVER_URL")? + "/create/session/")
+            .json(&Self {
+                account,
+                target,
+                ikp: hex::encode(ikp),
+                ekp: hex::encode(ekp),
+                opk_id,
+            })
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            info!("Sent request");
+            Ok(())
+        } else {
+            Err(Box::from(format!("Failed to send request: {}", response.status())))
+        }
+    }
+    
+    pub async fn receive(target: String, account: Arc<Mutex<Option<Account>>>) -> Result<Session, Box<dyn Error>> {
+        let name = {
+            let account_temp = account.lock().unwrap();
+            let account_ref = account_temp.as_ref().unwrap();
+            account_ref.name().to_string()
+        };
+        
+        let response = Client::new()
+            .post(std::env::var("SERVER_URL")? + "/get/session/")
+            .json(&SearchPayload { target: name , account: target.clone() })
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            info!("Received request");
+            let result = response.json::<Self>().await?;
+            
+            let session = Session::from(
+                account.clone(),
+                string_to_v32(&result.ikp).unwrap(),
+                string_to_v32(&result.ekp).unwrap(),
+                result.opk_id,
+                &target
+            )?;
+            
+            SessionKey::save(&session, account.lock().unwrap().as_ref().unwrap().name())?;
+            info!("Loaded session for {}", target);
+            
+            Ok(session)
+        } else {
+            Err(Box::from(format!("Failed to receive request: {}", response.status())))
         }
     }
 }

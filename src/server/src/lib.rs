@@ -32,7 +32,7 @@ pub struct CreatePayload {
 }
 
 #[derive(Deserialize)]
-struct SessionPayload { target: String, } 
+struct NormalPayload { target: String, } 
 
 #[derive(Deserialize)]
 struct SearchPayload { account:String, target: String, } 
@@ -77,6 +77,9 @@ pub async fn start() -> Result<(), Box<dyn std::error::Error>> {
         .route("/search/", post(search))
         .route("/create/", post(create))
         .route("/session/", post(session))
+        .route("/create/session/", post(create_session))
+        .route("/list/session/", post(get_session_list))
+        .route("/get/session/", post(get_session))
         .layer(Extension(db.clone()));
 
     let listener = tokio::net::TcpListener::bind(std::env::var("SERVER_URL")?).await.unwrap();
@@ -145,7 +148,7 @@ async fn search(
 #[axum::debug_handler]
 async fn session(
     Extension(db): Extension<Arc<PgPool>>,
-    Json(payload): Json<SessionPayload>
+    Json(payload): Json<NormalPayload>
 ) -> impl IntoResponse {
     info!("[Session] Creating session for {}", payload.target);
     let result = sqlx::query!("SELECT * FROM \"user\" WHERE account = $1", &payload.target)
@@ -176,4 +179,76 @@ async fn session(
         warn!("[Session] <{}> does not exist", payload.target);
         (StatusCode::NOT_FOUND, Json(None::<User>))
     } 
+}
+
+#[derive(Serialize, Deserialize)]
+struct RequestPayload {
+    account: String,
+    target: String,
+    ikp: String,
+    ekp: String,
+    opk_id: i32,
+}
+
+#[axum::debug_handler]
+async fn create_session(
+    Extension(db): Extension<Arc<PgPool>>,
+    Json(payload): Json<RequestPayload>
+) -> impl IntoResponse {
+    info!("[Session] {} Creating session for {}", payload.account, payload.target);
+    
+    let temp = sqlx::query!(
+        "INSERT INTO request (account, target, ek, ikp, id) VALUES ($1, $2, $3, $4, $5)",
+        &payload.account, &payload.target, &payload.ekp, &payload.ikp, payload.opk_id
+    ).execute(db.as_ref()).await;
+    
+    if temp.is_ok() {
+        info!("[Session] <{}> requested a session with <{}>", payload.account, payload.target);
+        StatusCode::OK
+    } else {
+        warn!("[Session] <{}> failed to request a session with <{}>", payload.account, payload.target);
+        StatusCode::INTERNAL_SERVER_ERROR
+    }
+}
+
+#[axum::debug_handler]
+async fn get_session_list(
+    Extension(db): Extension<Arc<PgPool>>,
+    Json(payload): Json<NormalPayload>
+) -> impl IntoResponse {
+    let result = sqlx::query!("SELECT account FROM request WHERE target = $1",&payload.target)
+        .fetch_all(db.as_ref())
+        .await.unwrap();
+    
+    let mut users = vec![];
+    for row in result {
+        users.push(row.account);
+    }
+    
+    info!("[Session] <{}> received {} requests", payload.target, users.len());
+    Json(users)
+}
+
+#[axum::debug_handler]
+async fn get_session(
+    Extension(db): Extension<Arc<PgPool>>,
+    Json(payload): Json<SearchPayload>
+) -> impl IntoResponse {
+    let result = sqlx::query!("SELECT * FROM request WHERE target = $1 and account = $2",&payload.target, &payload.account)
+        .fetch_optional(db.as_ref())
+        .await.unwrap();
+    
+    if let Some(row) = result {
+        info!("[Session] <{}> accepted a session with <{}>", payload.account, payload.target);
+        (StatusCode::OK, Json(Some(RequestPayload {
+            account: row.account,
+            target: row.target,
+            ikp: row.ikp,
+            ekp: row.ek,
+            opk_id: row.id
+        })))
+    } else {
+        warn!("[Session] <{}> failed to accept a session with <{}>", payload.account, payload.target);
+        (StatusCode::NOT_FOUND, Json(None::<RequestPayload>))
+    }
 }

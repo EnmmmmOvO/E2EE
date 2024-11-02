@@ -1,8 +1,7 @@
 use std::error::Error;
-use curve25519_dalek::constants::X25519_BASEPOINT;
-use curve25519_dalek::Scalar;
 use rand::RngCore;
 use rand::rngs::OsRng;
+use x25519_dalek::{PublicKey, StaticSecret};
 
 pub struct X25519 {
     pub private: [u8; 32],
@@ -21,13 +20,15 @@ pub fn string_to_v32(s: &str) -> Result<[u8; 32], Box<dyn Error>> {
 
 impl X25519 {
     pub fn rand_key() -> Self {
-        let mut rng = OsRng;
         let mut private = [0u8; 32];
-        rng.fill_bytes(&mut private);
+        OsRng.fill_bytes(&mut private);
 
-        let private_key = Scalar::from_bytes_mod_order(private);
-        let public = (private_key * X25519_BASEPOINT).to_bytes();
+        let secret = StaticSecret::from(private);
+        let public_key = PublicKey::from(&secret);
 
-        Self { private, public }
+        Self {
+            private,
+            public: *public_key.as_bytes(),
+        }
     }
 }
