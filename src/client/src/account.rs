@@ -1,5 +1,5 @@
 use std::error::Error;
-use crate::key::AccountKeys;
+use crate::key::{AccountKeys, IdentityKeyPair, SignedPreKeyPair};
 
 #[derive(Clone, Debug)]
 pub struct Account {
@@ -20,5 +20,13 @@ impl Account {
     
     pub fn name(&self) -> &str {
         &self.account
+    }
+    
+    pub fn ik(&self) -> &IdentityKeyPair {
+        &self.key.identity_keypair
+    }
+    
+    pub fn spk(&self) -> &SignedPreKeyPair {
+        &self.key.signed_prekey
     }
 }

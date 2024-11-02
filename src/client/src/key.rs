@@ -1,97 +1,104 @@
 use std::error::Error;
-use ring::rand::SystemRandom;
-use ring::signature::{Ed25519KeyPair, KeyPair};
+use curve25519_dalek::constants::X25519_BASEPOINT;
+use rand::rngs::OsRng;
+use ring::signature::{Ed25519KeyPair, KeyPair, Signature};
 use serde::{Deserialize, Serialize};
 use crate::file::LocalKey;
 use crate::socket::UploadPayload;
+use curve25519_dalek::scalar::Scalar;
+use rand::RngCore;
+use ring::rand::SystemRandom;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AccountKeys {
     pub identity_keypair: IdentityKeyPair,
     pub signed_prekey: SignedPreKeyPair,
-    pub one_time_prekeys: Vec<PreKey>,
+    pub one_time_prekeys: Vec<OneTimePreKey>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct IdentityKeyPair {
-    pub private_key: Vec<u8>,
-    pub public_key: Vec<u8>,
+    pub private_key: [u8; 32],
+    pub public_key: [u8; 32],
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SignedPreKeyPair {
-    pub(crate) id: u32,
-    pub private_key: Vec<u8>,
-    pub public_key: Vec<u8>,
+    pub private_key: [u8; 32],
+    pub public_key: [u8; 32],
     pub signature: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct PreKey {
-    pub id: u32,
-    pub private_key: Vec<u8>,
-    pub public_key: Vec<u8>,
+pub struct OneTimePreKey {
+    pub id: i32,
+    pub key: [u8; 32],
 }
+
 
 impl AccountKeys {
     pub async fn new(account: &str) -> Result<Self, Box<dyn Error>> {
-        let rng = SystemRandom::new();
+        let mut private_key = [0u8; 32];
+        OsRng.fill_bytes(&mut private_key);
         
-        let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng)
-            .map_err(|e| format!("Failed to generate keypair: {}", e))?;
-        let keypair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref())
-            .map_err(|e| format!("Failed to generate keypair: {}", e))?;
+        let ed_identity_keypair = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new())
+            .map_err(|e| format!("Failed to generate Ed25519 identity keypair: {}", e))?;
+        let ed_identity_keypair = Ed25519KeyPair::from_pkcs8(ed_identity_keypair.as_ref())
+            .map_err(|e| format!("Failed to load Ed25519 identity keypair: {}", e))?;
         
-        let identity_keypair = IdentityKeyPair {
-            private_key: pkcs8.as_ref().to_vec(),
-            public_key: keypair.public_key().as_ref().to_vec(),
-        };
+        let public_key: [u8; 32] = ed_identity_keypair
+            .public_key()
+            .as_ref()
+            .try_into()
+            .map_err(|_| "Failed to convert Ed25519 public key to [u8; 32]")?;
+        
+        let identity_keypair = IdentityKeyPair { private_key, public_key, };
+
+        let mut opk = vec![];
+        let mut opk_pub = vec![];
+
+        for i in 1..=100 {
+            let (pkcs8, public_key) = Self::key()?;
+
+            opk.push(OneTimePreKey { id: i, key: pkcs8, });
+            opk_pub.push(OneTimePreKey { id: i, key: public_key, });
+        }
         
         let key = AccountKeys {
-            signed_prekey: Self::generate_signed_prekey(&identity_keypair, &rng, 1)?,
-            one_time_prekeys: (2..=101).map(|id| Self::generate_prekey(&rng, id)).collect::<Result<Vec<_>, _>>()?,
+            signed_prekey: Self::generate_signed_prekey(&ed_identity_keypair)?,
+            one_time_prekeys: opk,
             identity_keypair,
         };
         
         LocalKey::save(&key, &account)?;
-        UploadPayload::new(&key, &account).await?;
+        UploadPayload::new(&key, &account, opk_pub).await?;
         
         Ok(key)
     }
     
     fn generate_signed_prekey(
-        identity_keypair: &IdentityKeyPair,
-        rng: &SystemRandom,
-        id: u32,
+        identity_keypair: &Ed25519KeyPair
     ) -> Result<SignedPreKeyPair, Box<dyn Error>> {
-        let prekey_pkcs8 = Ed25519KeyPair::generate_pkcs8(rng)
-            .map_err(|e| format!("Failed to generate prekey: {}", e))?;
-        let prekey_keypair = Ed25519KeyPair::from_pkcs8(prekey_pkcs8.as_ref())
-            .map_err(|e| format!("Failed to generate prekey: {}", e))?;
+        let (private_key, public_key) = Self::key()?;
         
-        let identity_signing_key = Ed25519KeyPair::from_pkcs8(&identity_keypair.private_key)
-            .map_err(|e| format!("Failed to generate prekey: {}", e))?;
-        let signature = identity_signing_key.sign(prekey_keypair.public_key().as_ref());
+        let signature: Signature = identity_keypair.sign(&public_key);
 
         Ok(SignedPreKeyPair {
-            id,
-            private_key: prekey_pkcs8.as_ref().to_vec(),
-            public_key: prekey_keypair.public_key().as_ref().to_vec(),
+            private_key,
+            public_key,
             signature: signature.as_ref().to_vec(),
         })
     }
 
-    fn generate_prekey(rng: &SystemRandom, id: u32) -> Result<PreKey, Box<dyn Error>> {
-        let pkcs8 = Ed25519KeyPair::generate_pkcs8(rng)
-            .map_err(|e| format!("Failed to generate prekey: {}", e))?;
-        let keypair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref())
-            .map_err(|e| format!("Failed to generate prekey: {}", e))?;
+    fn key() -> Result<([u8; 32], [u8; 32]), Box<dyn Error>> {
+        let mut rng = OsRng;
+        let mut  private_key = [0u8; 32];
+        rng.fill_bytes(&mut private_key);
         
-        Ok(PreKey {
-            id,
-            private_key: pkcs8.as_ref().to_vec(),
-            public_key: keypair.public_key().as_ref().to_vec(),
-        })
+        let private = Scalar::from_bytes_mod_order(private_key);
+        let public_key = (private * X25519_BASEPOINT).to_bytes();
+        
+        Ok((private_key, public_key))
     }
     
     pub fn load(account: &str) -> Result<Self, Box<dyn Error>> { Ok(LocalKey::load(account)?) }

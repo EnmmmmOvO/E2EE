@@ -1,17 +1,13 @@
 use eframe::egui;
 use std::sync::Arc;
 use std::sync::Mutex;
-use glob::glob;
-use log::info;
+use log::{info, warn};
 use tokio::runtime::Runtime;
 use crate::account::Account;
 use crate::file::{init_load, init_load_user, SessionKey};
 use crate::message::Message;
 use crate::session::Session;
 use crate::socket::{get_session, search};
-
-
-
 
 
 #[derive(Clone)]
@@ -162,7 +158,7 @@ impl AppState {
         for result in self.search_results.lock().unwrap().iter() {
             if ui.button(result).clicked() {
                 if self.load_user.contains(result) {
-                    match SessionKey::load(result, self.account.lock().unwrap().as_ref().unwrap().name()) {
+                    match SessionKey::load(result, self.account.clone()) {
                         Ok(session) => {
                             info!("Loaded session {:?}", session.name());
                             self.target.lock().unwrap().replace(session);
@@ -171,22 +167,22 @@ impl AppState {
                         },
                         Err(e) => {
                             ui.label("Error loading session");
-                            info!("Error loading session: {:?}", e);
+                            warn!("Error loading session: {:?}", e);
                         }
                     }
                 } else {
                     let input_text = result.clone();
                     let target = Arc::clone(&self.target);
-                    let name = self.account.lock().unwrap().as_ref().unwrap().name().to_string();
+                    let account = self.account.clone();
 
                     self.runtime.spawn(async move {
-                        match get_session(&input_text, &name).await {
+                        match get_session(&input_text, account).await {
                             Ok(session) => {
                                 info!("Got session for {input_text}");
                                 *target.lock().unwrap() = Some(session);
                             },
                             Err(e) => {
-                                info!("Error getting session: {:?}", e);
+                                warn!("Error getting session: {:?}", e);
                             }
                         }
                     });
@@ -200,7 +196,7 @@ impl AppState {
         
         for result in &self.load_user {
             if ui.button(result).clicked() {
-                match SessionKey::load(result, self.account.lock().unwrap().as_ref().unwrap().name()) {
+                match SessionKey::load(result, self.account.clone()) {
                     Ok(session) => {
                         info!("Loaded session {:?}", session.name());
                         self.target.lock().unwrap().replace(session);

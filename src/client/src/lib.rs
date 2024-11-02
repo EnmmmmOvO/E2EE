@@ -5,6 +5,7 @@ mod key;
 mod account;
 mod socket;
 mod session;
+mod support;
 
 use fern::Dispatch;
 use chrono::Local;

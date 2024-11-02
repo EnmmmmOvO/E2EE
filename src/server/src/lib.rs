@@ -16,13 +16,19 @@ use sqlx::{
     postgres::PgPoolOptions
 };
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
+pub struct OPKPayload {
+    id: i32,
+    key: String,
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct CreatePayload {
     account: String,
     ik_public: String,
     spk_public: String,
     spk_signature: String,
-    opk_private: Vec<String>,
+    opk: Vec<OPKPayload>,
 }
 
 #[derive(Deserialize)]
@@ -37,7 +43,8 @@ struct User {
     ik_public: String,
     spk_public: String,
     spk_signature: String,
-    opk_private: String, 
+    opk: String,
+    id: i32
 }
 
 fn setup_logger() -> Result<(), fern::InitError> {
@@ -93,10 +100,10 @@ async fn create(
             &payload.ik_public, &payload.spk_public, &payload.spk_signature, &payload.account
         ).execute(db.as_ref()).await.unwrap();
         sqlx::query!("DELETE FROM opk WHERE account = $1", &payload.account).execute(db.as_ref()).await.unwrap();
-        for key in payload.opk_private.iter() {
+        for key in payload.opk.iter() {
             sqlx::query!(
-                "INSERT INTO opk (account, opk) VALUES ($1, $2)",
-                &payload.account, key
+                "INSERT INTO opk (account, opk, id) VALUES ($1, $2, $3)",
+                &payload.account, key.key, key.id
             ).execute(db.as_ref()).await.unwrap();
         }
         info!("[Signup] <{}> already exists, updated the account", payload.account);
@@ -105,10 +112,10 @@ async fn create(
             "INSERT INTO \"user\" (account, ik_public, spk_public, spk_signature) VALUES ($1, $2, $3, $4)",
             &payload.account, &payload.ik_public, &payload.spk_public, &payload.spk_signature
         ).execute(db.as_ref()).await.unwrap();
-        for key in payload.opk_private.iter() {
+        for key in payload.opk.iter() {
             sqlx::query!(
-                "INSERT INTO opk (account, opk) VALUES ($1, $2)",
-                &payload.account, key
+                "INSERT INTO opk (account, opk, id) VALUES ($1, $2, $3)",
+                &payload.account, key.key, key.id
             ).execute(db.as_ref()).await.unwrap();
         }
         info!("[Signup] <{}> created an account", payload.account);
@@ -156,7 +163,8 @@ async fn session(
                 ik_public: row.ik_public,
                 spk_public: row.spk_public,
                 spk_signature: row.spk_signature,
-                opk_private: opk.opk,
+                opk: opk.opk,
+                id: opk.id
             };
             info!("[Session] <{}> created a session", payload.target);
             (StatusCode::OK, Json(Some(user)))

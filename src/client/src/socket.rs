@@ -1,11 +1,14 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
+use std::sync::{Arc, Mutex};
 use hex::FromHex;
-use log::{info, warn};
+use log::{info};
+use crate::account::Account;
 use crate::file::SessionKey;
-use crate::key::AccountKeys;
+use crate::key::{AccountKeys, OneTimePreKey};
 use crate::session::Session;
+use crate::support::string_to_v32;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct SearchPayload {
@@ -37,10 +40,11 @@ pub struct SessionResponse {
     ik_public: String,
     spk_public: String,
     spk_signature: String,
-    opk_private: String, 
+    opk: String, 
+    id: i32,
 }
 
-pub async fn get_session(target: &str, account: &str) -> Result<Session, Box<dyn Error>> {
+pub async fn get_session(target: &str, account: Arc<Mutex<Option<Account>>>) -> Result<Session, Box<dyn Error>> {
     let response = Client::new()
         .post(std::env::var("SERVER_URL")? + "/session/")
         .json(&SessionPayload { target: target.to_string() })
@@ -52,13 +56,15 @@ pub async fn get_session(target: &str, account: &str) -> Result<Session, Box<dyn
         
         let session = Session::new(
             &*result.account,
-            Vec::from_hex(&result.ik_public)?,
-            Vec::from_hex(&result.spk_public)?,
+            string_to_v32(&result.ik_public)?,
+            string_to_v32(&result.spk_public)?,
             Vec::from_hex(&result.spk_signature)?,
-            Vec::from_hex(&result.opk_private)?
-        );
+            string_to_v32(&result.opk)?,
+            result.id,
+            account.clone()
+        )?;
         
-        SessionKey::save(&session, account)?;
+        SessionKey::save(&session, account.lock().unwrap().as_ref().unwrap().name())?;
         info!("Loaded session for {}", target);
         Ok(session)
     } else {
@@ -66,6 +72,11 @@ pub async fn get_session(target: &str, account: &str) -> Result<Session, Box<dyn
     }
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub struct OPKPayload {
+    key: String,
+    id: i32,
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UploadPayload {
@@ -73,17 +84,17 @@ pub struct UploadPayload {
     ik_public: String,
     spk_public: String,
     spk_signature: String,
-    opk_private: Vec<String>,
+    opk: Vec<OPKPayload>,
 }
 
 impl UploadPayload {
-    pub async fn new(account: &AccountKeys, name: &str) -> Result<(), Box<dyn Error>> {
+    pub async fn new(account: &AccountKeys, name: &str, opk: Vec<OneTimePreKey>) -> Result<(), Box<dyn Error>> {
         let key = UploadPayload {
             account: name.to_string(),
             ik_public: hex::encode(&account.identity_keypair.public_key),
             spk_public: hex::encode(&account.signed_prekey.public_key),
             spk_signature: hex::encode(&account.signed_prekey.signature),
-            opk_private: account.one_time_prekeys.iter().map(|k| hex::encode(&k.private_key)).collect()
+            opk: opk.iter().map(|k| OPKPayload { key: hex::encode(&k.key), id: k.id, }).collect(),
         };
         
         let response = Client::new()

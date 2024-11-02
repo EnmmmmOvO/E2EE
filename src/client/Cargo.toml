@@ -19,3 +19,6 @@ serde = { version = "1.0.214", features = ["derive"] }
 serde_json = "1.0.132"
 reqwest = { version = "0.12.9", features = ["json"] }
 ring = "0.17.0"
+hkdf = "0.12.4"
+sha2 = "0.10.8"
+curve25519-dalek = "4.1.3"

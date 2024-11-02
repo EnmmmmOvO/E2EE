@@ -6,7 +6,7 @@ create table "user" (
 );
 
 create table opk (
+    opk char(64) not null primary key,
     account varchar(255),
-    opk char(166) not null,
-    primary key (account, opk)
+    id int not null
 );

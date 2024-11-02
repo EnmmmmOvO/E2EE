@@ -5,10 +5,11 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use glob::glob;
 use log::info;
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use crate::key::{AccountKeys, IdentityKeyPair, PreKey, SignedPreKeyPair};
+use crate::account::Account;
+use crate::key::{AccountKeys, IdentityKeyPair, OneTimePreKey, SignedPreKeyPair};
 use crate::session::Session;
+use crate::support::{string_to_v32, v32};
 
 pub fn init_load() -> Vec<String> {
     info!("Loading user directories");
@@ -55,13 +56,19 @@ pub fn init_load_user(user: &str) -> Vec<String> {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct OPKLocal {
+    key: String,
+    id: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct LocalKey {
     ik_private: String,
     ik_public: String,
     spk_private: String,
     spk_public: String,
     spk_signature: String,
-    opk_private: Vec<String>,
+    opk: Vec<OPKLocal>,
 }
 
 impl LocalKey {
@@ -72,7 +79,10 @@ impl LocalKey {
             spk_private: hex::encode(&account.signed_prekey.private_key),
             spk_public: hex::encode(&account.signed_prekey.public_key),
             spk_signature: hex::encode(&account.signed_prekey.signature),
-            opk_private: account.one_time_prekeys.iter().map(|k| hex::encode(&k.private_key)).collect()
+            opk: account.one_time_prekeys.iter().map(|k| OPKLocal {
+                key: hex::encode(&k.key),
+                id: k.id,
+            }).collect(),
         };
         
         let folder_path = Path::new(&std::env::var("BACKUP_PATH")?).join(path);
@@ -91,24 +101,18 @@ impl LocalKey {
         
         Ok(AccountKeys {
             identity_keypair: IdentityKeyPair {
-                private_key: hex::decode(json.ik_private)?,
-                public_key: hex::decode(json.ik_public)?,
+                private_key: v32(hex::decode(json.ik_private)?)?,
+                public_key: v32(hex::decode(json.ik_public)?)?,
             },
             signed_prekey: SignedPreKeyPair {
-                id: 1,
-                private_key: hex::decode(json.spk_private)?,
-                public_key: hex::decode(json.spk_public)?,
+                private_key: v32(hex::decode(json.spk_private)?)?,
+                public_key: v32(hex::decode(json.spk_public)?)?,
                 signature: hex::decode(json.spk_signature)?,
             },
-            one_time_prekeys: json.opk_private.iter()
-                .map(|k| hex::decode(k)).collect::<Result<Vec<_>, _>>()?
-                .iter()
-                .enumerate()
-                .map(|(i, k)| PreKey { 
-                    id: i as u32, 
-                    private_key: k.clone(), 
-                    public_key: vec![], 
-                }).collect(),
+            one_time_prekeys: json.opk.iter().map(|k| OneTimePreKey {
+                id: k.id,
+                key: string_to_v32(&k.key).unwrap(),
+            }).collect(),
         })
     }
 }
@@ -118,7 +122,8 @@ pub struct SessionKey {
     ikp: String,
     spk: String,
     spk_sig: String,
-    opk: String
+    opk: String,
+    id: i32,
 }
 
 impl SessionKey {
@@ -128,6 +133,7 @@ impl SessionKey {
             spk: hex::encode(&session.spk),
             spk_sig: hex::encode(&session.spk_sig),
             opk: hex::encode(&session.opk),
+            id: session.id,
         };
         
         let folder_path = Path::new(&std::env::var("BACKUP_PATH")?).join(account).join(&session.target);
@@ -139,17 +145,23 @@ impl SessionKey {
         Ok(())
     }
     
-    pub fn load(path: &str, account: &str) -> Result<Session, Box<dyn Error>> {
+    pub fn load(path: &str, account: Arc<Mutex<Option<Account>>>) -> Result<Session, Box<dyn Error>> {
         let json: SessionKey = serde_json::from_reader(
-            File::open(std::env::var("BACKUP_PATH")? + account + "/" + path + "/key.json")?
+            File::open(
+                std::env::var("BACKUP_PATH")? 
+                    + account.lock().unwrap().as_ref().unwrap().name() 
+                    + "/" + path + "/key.json"
+            )?
         )?;
         
         Ok(Session::new(
             path,
-            hex::decode(json.ikp)?,
-            hex::decode(json.spk)?,
+            string_to_v32(&json.ikp)?,
+            string_to_v32(&json.spk)?,
             hex::decode(json.spk_sig)?,
-            hex::decode(json.opk)?,
-        ))
+            string_to_v32(&json.opk)?,
+            json.id,
+            account,
+        )?)
     }
 }
