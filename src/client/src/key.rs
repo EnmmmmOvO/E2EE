@@ -1,13 +1,12 @@
 use std::error::Error;
-use curve25519_dalek::constants::X25519_BASEPOINT;
 use rand::rngs::OsRng;
 use ring::signature::{Ed25519KeyPair, KeyPair, Signature};
 use serde::{Deserialize, Serialize};
 use crate::file::LocalKey;
 use crate::socket::UploadPayload;
-use curve25519_dalek::scalar::Scalar;
 use rand::RngCore;
 use ring::rand::SystemRandom;
+use crate::support::X25519;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AccountKeys {
@@ -58,10 +57,10 @@ impl AccountKeys {
         let mut opk_pub = vec![];
 
         for i in 1..=100 {
-            let (pkcs8, public_key) = Self::key()?;
+            let keypair = X25519::rand_key();
 
-            opk.push(OneTimePreKey { id: i, key: pkcs8, });
-            opk_pub.push(OneTimePreKey { id: i, key: public_key, });
+            opk.push(OneTimePreKey { id: i, key: keypair.private, });
+            opk_pub.push(OneTimePreKey { id: i, key: keypair.public, });
         }
         
         let key = AccountKeys {
@@ -79,27 +78,18 @@ impl AccountKeys {
     fn generate_signed_prekey(
         identity_keypair: &Ed25519KeyPair
     ) -> Result<SignedPreKeyPair, Box<dyn Error>> {
-        let (private_key, public_key) = Self::key()?;
+        let keypair = X25519::rand_key();
         
-        let signature: Signature = identity_keypair.sign(&public_key);
+        let signature: Signature = identity_keypair.sign(&keypair.public);
 
         Ok(SignedPreKeyPair {
-            private_key,
-            public_key,
+            private_key: keypair.private,
+            public_key: keypair.public,
             signature: signature.as_ref().to_vec(),
         })
     }
 
-    fn key() -> Result<([u8; 32], [u8; 32]), Box<dyn Error>> {
-        let mut rng = OsRng;
-        let mut  private_key = [0u8; 32];
-        rng.fill_bytes(&mut private_key);
-        
-        let private = Scalar::from_bytes_mod_order(private_key);
-        let public_key = (private * X25519_BASEPOINT).to_bytes();
-        
-        Ok((private_key, public_key))
-    }
+    
     
     pub fn load(account: &str) -> Result<Self, Box<dyn Error>> { Ok(LocalKey::load(account)?) }
 }
