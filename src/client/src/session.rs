@@ -14,8 +14,6 @@ use crate::message::Message;
 use crate::socket::{RequestPayload};
 use crate::support::X25519;
 
-const CHAIN_KEY_CONSTANT: &[u8] = b"chain_key";
-const MESSAGE_KEY_CONSTANT: &[u8] = b"message_key";
 const ROOT_KEY_CONSTANT: &[u8] = b"root_key";
 const NEXT_HEADER_KEY_CONSTANT: &[u8] = b"next_header";
 
@@ -23,8 +21,6 @@ const NEXT_HEADER_KEY_CONSTANT: &[u8] = b"next_header";
 pub struct Session {
     pub target: String,
     pub root_key: [u8; 32],
-    pub send_chain_key: [u8; 32],
-    pub recv_chain_key: [u8; 32],
 }
 
 impl Session {
@@ -70,16 +66,9 @@ impl Session {
             Ok::<[u8; 32], Box<dyn Error>>(root_key)
         }?;
 
-        let (send_chain_key, recv_chain_key) = derive_initial_chain_keys(&root_key)?;
-
         RequestPayload::send(name.to_string(), ik_public, ek.public, id, target.to_string()).await?;
 
-        Ok(Self {
-            root_key,
-            send_chain_key,
-            recv_chain_key,
-            target: target.to_string(),
-        })
+        Ok(Self { root_key, target: target.to_string(), })
     }
     
     pub fn from(
@@ -125,28 +114,11 @@ impl Session {
             Ok::<[u8; 32], Box<dyn Error>>(root_key)
         }?;
 
-        let (send_chain_key, recv_chain_key) = derive_initial_chain_keys_recv(&root_key)?;
-
-        Ok(Self {
-            root_key,
-            send_chain_key,
-            recv_chain_key,
-            target: target.to_string(),
-        })
+        Ok(Self { root_key, target: target.to_string(), })
     }
     
-    pub fn load(
-        target: &str,
-        root_key: [u8; 32],
-        send_chain_key: [u8; 32],
-        recv_chain_key: [u8; 32],
-    ) -> Self {
-        Self {
-            root_key,
-            send_chain_key,
-            recv_chain_key,
-            target: target.to_string(),
-        }
+    pub fn load(target: &str, root_key: [u8; 32], ) -> Self {
+        Self { root_key, target: target.to_string(), }
     }
 
     pub fn name(&self) -> &str { &self.target }
@@ -199,60 +171,21 @@ impl Session {
     }
     
     fn ratchet_send(&mut self, dh_public: [u8; 32]) -> Result<[u8; 32], Box<dyn Error>> {
-        
         let dh_output = x25519(dh_public, self.root_key);
         
         let (new_root_key, new_chain_key) = self.ratchet_root_key(&dh_output)?;
-        
-        // Update session state
         self.root_key = new_root_key;
-        self.send_chain_key = new_chain_key;
-
-        // Then perform normal message key derivation
-        let prk = Salt::new(HKDF_SHA256, &self.send_chain_key).extract(&[]);
         
-        let mut next_chain_key = [0u8; 32];
-        prk.expand(&[CHAIN_KEY_CONSTANT], HKDF_SHA256)
-           .map_err(|e| format!("Failed to expand chain key: {}", e))?
-           .fill(&mut next_chain_key)
-           .map_err(|e| format!("Failed to fill chain key: {}", e))?;
-        
-        let mut message_key = [0u8; 32];
-        prk.expand(&[MESSAGE_KEY_CONSTANT], HKDF_SHA256)
-           .map_err(|e| format!("Failed to expand message key: {}", e))?
-           .fill(&mut message_key)
-           .map_err(|e| format!("Failed to fill message key: {}", e))?;
-        
-        self.send_chain_key = next_chain_key;
-        
-        Ok(message_key)
+        Ok(new_chain_key)
     }
 
     fn ratchet_recv(&mut self, dh_public: [u8; 32]) -> Result<[u8; 32], Box<dyn Error>> {
         let dh_output = x25519(dh_public, self.root_key);
         
         let (new_root_key, new_chain_key) = self.ratchet_root_key(&dh_output)?;
-        
         self.root_key = new_root_key;
-        self.recv_chain_key = new_chain_key;
         
-        let prk = Salt::new(HKDF_SHA256, &self.recv_chain_key).extract(&[]);
-        
-        let mut next_chain_key = [0u8; 32];
-        prk.expand(&[CHAIN_KEY_CONSTANT], HKDF_SHA256)
-           .map_err(|e| format!("Failed to expand chain key: {}", e))?
-           .fill(&mut next_chain_key)
-           .map_err(|e| format!("Failed to fill chain key: {}", e))?;
-        
-        let mut message_key = [0u8; 32];
-        prk.expand(&[MESSAGE_KEY_CONSTANT], HKDF_SHA256)
-           .map_err(|e| format!("Failed to expand message key: {}", e))?
-           .fill(&mut message_key)
-           .map_err(|e| format!("Failed to fill message key: {}", e))?;
-        
-        self.recv_chain_key = next_chain_key;
-        
-        Ok(message_key)
+        Ok(new_chain_key)
     }
 
     fn ratchet_root_key(&self, dh_output: &[u8; 32]) -> Result<([u8; 32], [u8; 32]), Box<dyn Error>> {
@@ -274,46 +207,6 @@ impl Session {
         
         Ok((new_root_key, new_chain_key))
     }
-}
-
-fn derive_initial_chain_keys(root_key: &[u8; 32]) -> Result<([u8; 32], [u8; 32]), Box<dyn Error>> {
-    let salt = Salt::new(HKDF_SHA256, root_key);
-    let prk = salt.extract(&[]);
-
-    let mut send_chain_key = [0u8; 32];
-    let mut recv_chain_key = [0u8; 32];
-
-    let send_okm = prk.expand(&[b"send chain"], HKDF_SHA256)
-        .map_err(|e| format!("Failed to expand send chain key: {}", e))?;
-    send_okm.fill(&mut send_chain_key)
-        .map_err(|e| format!("Failed to fill send chain key: {}", e))?;
-
-    let recv_okm = prk.expand(&[b"recv chain"], HKDF_SHA256)
-        .map_err(|e| format!("Failed to expand recv chain key: {}", e))?;
-    recv_okm.fill(&mut recv_chain_key)
-        .map_err(|e| format!("Failed to fill recv chain key: {}", e))?;
-
-    Ok((send_chain_key, recv_chain_key))
-}
-
-fn derive_initial_chain_keys_recv(root_key: &[u8; 32]) -> Result<([u8; 32], [u8; 32]), Box<dyn Error>> {
-    let salt = Salt::new(HKDF_SHA256, root_key);
-    let prk = salt.extract(&[]);
-
-    let mut send_chain_key = [0u8; 32];
-    let mut recv_chain_key = [0u8; 32];
-
-    let send_okm = prk.expand(&[b"recv chain"], HKDF_SHA256)
-        .map_err(|e| format!("Failed to expand send chain key: {}", e))?;
-    send_okm.fill(&mut send_chain_key)
-        .map_err(|e| format!("Failed to fill send chain key: {}", e))?;
-
-    let recv_okm = prk.expand(&[b"send chain"], HKDF_SHA256)
-        .map_err(|e| format!("Failed to expand recv chain key: {}", e))?;
-    recv_okm.fill(&mut recv_chain_key)
-        .map_err(|e| format!("Failed to fill recv chain key: {}", e))?;
-
-    Ok((send_chain_key, recv_chain_key))
 }
 
 fn verify_spk_signature(ikp_public: &[u8], spk: &[u8], spk_sig: &[u8]) -> Result<(), Box<dyn Error>> {
