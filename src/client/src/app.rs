@@ -1,5 +1,6 @@
 use eframe::egui;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 use log::{info, warn};
 use tokio::runtime::Runtime;
@@ -22,6 +23,7 @@ pub struct AppState {
     request_user: Arc<Mutex<Vec<String>>>,
     runtime: Arc<Runtime>,
     refresh_task: Option<tokio::task::JoinHandle<()>>,
+    should_run: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -32,25 +34,28 @@ impl AppState {
             let time = message.timestamp;
             self.message.lock().unwrap().push(message.clone());
             
-            let payload = self.target.lock().unwrap().as_mut().unwrap().add_message(message);
+            let account = {
+                self.account.lock().unwrap().as_ref().unwrap().name().to_string()
+            };
             
-            if let Ok(payload) = payload { 
-                let account = {
-                    self.account.lock().unwrap().as_ref().unwrap().name().to_string()
-                };
-                
-                let target = {
-                    self.target.lock().unwrap().as_ref().unwrap().name().to_string()
-                };
-                
-                self.runtime.spawn(async move {
-                    match MessagePayload::send(&account, &target, payload, time).await {
-                        Ok(_) => { info!("Sent message"); },
-                        Err(e) => { warn!("Error sending message: {:?}", e); }
-                    }
-                });
-            } else {
-                warn!("Error adding message");
+            let payload = self.target.lock().unwrap().as_mut().unwrap().add_message(message, &account);
+            
+            match payload {
+                Ok(payload) => {
+                    let target = {
+                        self.target.lock().unwrap().as_ref().unwrap().name().to_string()
+                    };
+
+                    self.runtime.spawn(async move {
+                        match MessagePayload::send(&account, &target, payload, time).await {
+                            Ok(_) => { info!("Sent message"); },
+                            Err(e) => { warn!("Error sending message: {:?}", e); }
+                        }
+                    });
+                },
+                Err(e) => {
+                    warn!("Error adding message: {:?}", e);
+                }
             }
         }
     }
@@ -68,6 +73,7 @@ impl AppState {
             request_user: Arc::new(Mutex::new(Vec::new())),
             runtime: Arc::new(Runtime::new().unwrap()),
             refresh_task: None,
+            should_run: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -324,10 +330,14 @@ impl AppState {
             };
             
             if let (Some(account), Some(target_name)) = (account, target_name) {
+                
+                self.should_run.store(true, std::sync::atomic::Ordering::Relaxed);
+                let should_run = Arc::clone(&self.should_run);
                 let message = Arc::clone(&self.message);
+                
                 self.refresh_task = Some(runtime.spawn(async move {
                     let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
-                    loop {
+                    while should_run.load(std::sync::atomic::Ordering::Relaxed) {
                         interval.tick().await;
                         
                         match MessagePayload::receive(account.to_string(), target_name.to_string()).await {
@@ -335,7 +345,7 @@ impl AppState {
                                 let mut temp = vec![];
                                 for message in messages {
                                     if let Some(target) = target.lock().unwrap().as_mut() {
-                                        match target.revive_message(message.message, message.timestamp) {
+                                        match target.revive_message(message.message, message.timestamp, &account) {
                                             Ok(result) => {
                                                 temp.push(result);
                                             },
@@ -358,11 +368,13 @@ impl AppState {
         
         ui.horizontal(|ui| {
             if ui.button("Back").clicked() {
+                self.should_run.store(false, std::sync::atomic::Ordering::Relaxed);
                 self.current_page = Page::Search;
                 self.search_results.lock().unwrap().clear();
                 self.target.lock().unwrap().take();
                 self.input_text.clear();
                 self.load_user = init_load_user(&self.account.lock().unwrap().as_ref().unwrap().name());
+                self.refresh_task.take();
                 
                 let temp = self.account.lock().unwrap().as_ref().unwrap().name().to_string();
                 let request_user = Arc::clone(&self.request_user);

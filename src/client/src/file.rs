@@ -119,21 +119,36 @@ impl LocalKey {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SessionKey {
-    session_key: String,
     pub send_chain_key: String,
     pub recv_chain_key: String,
+    pub root_key: String,
 }
 
 impl SessionKey {
     pub fn save(session: &Session, account: &str) -> Result<(), Box<dyn Error>> {
         let json = SessionKey {
-            session_key: hex::encode(&session.session_key),
             send_chain_key: hex::encode(&session.send_chain_key),
             recv_chain_key: hex::encode(&session.recv_chain_key),
+            root_key: hex::encode(&session.root_key),
         };
         
         let folder_path = Path::new(&std::env::var("BACKUP_PATH")?).join(account).join(&session.target);
         fs::create_dir(&folder_path)?;
+        
+        let file = File::create(folder_path.join("key.json"))?;
+        serde_json::to_writer_pretty(file, &json)?;
+        
+        Ok(())
+    }
+    
+    pub fn overload(session: &Session, account: &str) -> Result<(), Box<dyn Error>> {
+        let json = SessionKey {
+            send_chain_key: hex::encode(&session.send_chain_key),
+            recv_chain_key: hex::encode(&session.recv_chain_key),
+            root_key: hex::encode(&session.root_key),
+        };
+        
+        let folder_path = Path::new(&std::env::var("BACKUP_PATH")?).join(account).join(&session.target);
         
         let file = File::create(folder_path.join("key.json"))?;
         serde_json::to_writer_pretty(file, &json)?;
@@ -152,9 +167,9 @@ impl SessionKey {
         
         Ok(Session::load(
             path,
-            string_to_v32(&json.session_key)?,
+            string_to_v32(&json.root_key)?,
             string_to_v32(&json.send_chain_key)?,
-            string_to_v32(&json.recv_chain_key)?
+            string_to_v32(&json.recv_chain_key)?,
         ))
     }
 }

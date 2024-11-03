@@ -294,7 +294,7 @@ async fn get_message(
 ) -> impl IntoResponse {
     info!("[Message] {} sent a message to {}", payload.account, payload.target);
     let temp = sqlx::query!(
-        "SELECT * FROM CHAT WHERE account = $1 and target = $2",
+        "SELECT * FROM CHAT WHERE account = $1 and target = $2 order by timestamp",
         &payload.target, &payload.account
     ).fetch_all(db.as_ref()).await;
     
