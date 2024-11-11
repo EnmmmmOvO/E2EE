@@ -330,7 +330,6 @@ impl AppState {
             };
             
             if let (Some(account), Some(target_name)) = (account, target_name) {
-                
                 self.should_run.store(true, std::sync::atomic::Ordering::Relaxed);
                 let should_run = Arc::clone(&self.should_run);
                 let message = Arc::clone(&self.message);

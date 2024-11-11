@@ -6,6 +6,7 @@ mod account;
 mod socket;
 mod session;
 mod support;
+mod util;
 
 use fern::Dispatch;
 use chrono::Local;

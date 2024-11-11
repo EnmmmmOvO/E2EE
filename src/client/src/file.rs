@@ -118,11 +118,33 @@ impl LocalKey {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SessionKey { pub root_key: String, }
+pub struct SessionKey { 
+    pub root_key: String,
+    pub recv_key: String,
+    pub send_key: String,
+    pub ratchet_private: String,
+    pub last_pub: String,
+    pub time: i64,
+    pub reverse: bool,
+    pub ratchet_public: String,
+    pub check: bool,
+    pub record: Vec<String>,
+}
 
 impl SessionKey {
     pub fn save(session: &Session, account: &str) -> Result<(), Box<dyn Error>> {
-        let json = SessionKey { root_key: hex::encode(&session.root_key), };
+        let json = SessionKey { 
+            root_key: hex::encode(&session.root_key),
+            recv_key: hex::encode(&session.recv_key),
+            send_key: hex::encode(&session.send_key),
+            ratchet_private: hex::encode(&session.ratchet_private),
+            last_pub: hex::encode(&session.last_pub),
+            ratchet_public: hex::encode(&session.ratchet_public),
+            time: session.time,
+            reverse: session.reverse,
+            check: session.check,
+            record: session.record.iter().map(|r| hex::encode(r)).collect(),
+        };
         
         let folder_path = Path::new(&std::env::var("BACKUP_PATH")?).join(account).join(&session.target);
         fs::create_dir(&folder_path)?;
@@ -134,7 +156,18 @@ impl SessionKey {
     }
     
     pub fn overload(session: &Session, account: &str) -> Result<(), Box<dyn Error>> {
-        let json = SessionKey { root_key: hex::encode(&session.root_key), };
+        let json = SessionKey { 
+            root_key: hex::encode(&session.root_key),
+            recv_key: hex::encode(&session.recv_key),
+            send_key: hex::encode(&session.send_key),
+            ratchet_private: hex::encode(&session.ratchet_private),
+            last_pub: hex::encode(&session.last_pub),
+            time: session.time,
+            reverse: session.reverse,
+            ratchet_public: hex::encode(&session.ratchet_public),
+            check: session.check,
+            record: session.record.iter().map(|r| hex::encode(r)).collect(),
+        };
         
         let folder_path = Path::new(&std::env::var("BACKUP_PATH")?).join(account).join(&session.target);
         
@@ -152,7 +185,23 @@ impl SessionKey {
                     + "/" + path + "/key.json"
             )?
         )?;
+        let mut record = vec![];
         
-        Ok(Session::load(path, string_to_v32(&json.root_key)?, ))
+        for r in json.record {
+            record.push(string_to_v32(&r)?);
+        }
+        Ok(Session::load(
+            path,
+            string_to_v32(&json.root_key)?,
+            string_to_v32(&json.recv_key)?,
+            string_to_v32(&json.send_key)?,
+            string_to_v32(&json.ratchet_private)?,
+            string_to_v32(&json.ratchet_public)?,
+            string_to_v32(&json.last_pub)?,
+            json.time,
+            json.reverse,
+            record,
+            json.check,
+        ))
     }
 }
