@@ -6,7 +6,6 @@ use aes_gcm::aead::rand_core::RngCore;
 use x25519_dalek::x25519;
 use crate::account::Account;
 use hkdf::Hkdf;
-use log::info;
 use sha2::Sha256;
 use crate::file::SessionKey;
 use crate::message::Message;
