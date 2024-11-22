@@ -1,6 +1,9 @@
 # E2EE
 COMP6841 Special Awesome Project
 
+[Presentation](https://youtu.be/o6H-fr7C9h4)
+[paper](./paper/paper.pdf)
+
 For SQLx to work, you need to have the following environment variables set:
 `
 DATABASE_URL=postgres://localhost:5432/e2ee;
